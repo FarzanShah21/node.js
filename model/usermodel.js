@@ -15,7 +15,7 @@ const UserSchema = new Schema(
       enum: ["user", "admin"],
       default: "user",
     },
-    quantities: [
+    cartItems: [
       {
         quantity: {
           type: Number,

@@ -25,6 +25,10 @@ const ProductSchema = new Schema({
     stock:{
         type:Number,
         default:0
+    },
+    isFeatured:{
+        type:Boolean,
+        default:false
     }
     
 })

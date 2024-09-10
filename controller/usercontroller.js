@@ -1,32 +1,70 @@
 import User from "../model/usermodel.js";
 import bcrypt from 'bcrypt'
-export const register = async(req,res)=>{
-try {
-    const userinfo = req.body;
-    const {name, email ,password} = userinfo;
-    const userExist = await User.findOne({email})
-    if(userExist){
-        return res.status(409).json({
-            message:"email already exists"
-        })
+import jwt from 'jsonwebtoken';
+import { redis } from "../middleware/redis.js";
+// import cookie from "cookie"
+
+const generatetoken =(userid)=>{
+   const accesstoken = jwt.sign({userid},process.env.secretkey1,{
+    expiresIn:'15m'
+   }) 
+   const refreshtoken = jwt.sign({userid},process.env.secretkey,{
+    expiresIn:'7d'
+   })
+   return {accesstoken,refreshtoken}
+}
+const storetoken = async(userid, refreshtoken)=>{
+await  redis.set(`refreshtoken ${userid}`,refreshtoken)
+}
+const setCookies = (res, accesstoken, refreshtoken) => {
+    res.cookie("accesstoken", accesstoken, {
+        httpOnly: true,
+        secure: process.env.Node_env === "production",
+        sameSite: "strict",
+        maxAge: 7 * 24 * 60 * 60 * 1000 // 7 days in milliseconds
+    });
+    res.cookie("refreshtoken", refreshtoken, {
+        httpOnly: true,
+        secure: process.env.Node_env === "production",
+        sameSite: "strict",
+        maxAge: 15 * 60 * 1000 // 15 minutes in milliseconds
+    });
+};
+
+export const register = async (req, res) => {
+    try {
+        const { name, email, password } = req.body;
+
+        // Hash the password
+        const hashpassword = await bcrypt.hash(password, 10);
+
+        // Create the user
+        const user = await User.create({
+            name,
+            email,
+            password: hashpassword
+        });
+
+        // Generate tokens
+        const { accesstoken, refreshtoken } = generatetoken(user._id);
+
+        // Set cookies
+        setCookies(res, accesstoken, refreshtoken);
+        await storetoken(user._id , refreshtoken)
+        // Respond with success message
+        res.status(200).json({
+            message: "User created successfully",
+            user,
+       accesstoken,
+        refreshtoken
+        });
+    } catch (error) {
+        res.status(500).json({
+            message: "Error while registering",
+            error
+        });
     }
-    const hashedPassword = await bcrypt.hash(password,10)
-    const user = await User.create({
-        name,
-        email,
-        password: hashedPassword
-    })
-    res.status(200).json({
-        message:"user created successfully",
-        user
-    })
-} catch (error) {
-    res.status(401).json({
-        message:"error registering user",
-        error
-    })
-}
-}
+};
 export const GetUser = async(req,res)=>{
 try {
     const detail = await User.find();
@@ -92,6 +130,10 @@ try {
             message:"invalid credential"
         })
     }
+    // Set cookies
+    
+    
+    // setCookies(res, accesstoken, refreshtoken);
     res.status(200).json({
         message:"User logged in successfully",
         user:userExist
@@ -102,4 +144,53 @@ try {
         error
     })
 }
+}
+
+export const Logout=async(req,res)=>{
+    try {
+        const refreshtoken=req.cookies.refreshtoken;
+        if(!refreshtoken){
+            return{messgae:"No refresh token found"};
+
+        }
+        const decode=jwt.verify(refreshtoken,process.env.secretkey)
+        if(!decode){
+            return{message:"Invalid refresh token"};
+        }
+        await redis.del('refreshtoken ${decode.userid}')
+        //Clear cookies
+        res.clearCookie("accesstoken");
+        res.clearCookie("refreshtoken");
+        return {message:"Logged out successfully"};
+    } catch (error) {
+        return {message:"Error logging out",error};
+        
+    }
+}
+
+export const refreshtoken=async(req,res)=>{
+   try {
+    const refreshtoken=req.cookies.refreshtoken;
+    if(!refreshtoken){
+        return {message:"No refresh token found"};
+
+    }
+    const decode=jwt.verify(refreshtoken,process.env.secretkey)
+    if(!decode){
+        return {message:"Invalid refresh token"};
+    }
+    await redis.get('refreshtoken ${decode.userid}')
+    const {accesstoken}=generatetoken(decode.userid);
+    res.cookie("accesstoken",accesstoken,{
+        httpOnly:true,
+        secure:process.env.NODE_ENV==="production",
+        sameSite:"strict",
+        maxAge:7 * 24 * 60 * 60 * 1000
+    });
+    return {message:"Refreshed access token successfully",accesstoken};
+   } catch (error) {
+    return {message:"Error refreshing access token",error};
+   }
+
+
 }
